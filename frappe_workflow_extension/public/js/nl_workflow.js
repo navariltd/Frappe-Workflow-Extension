@@ -25,7 +25,7 @@ $(document).on("form-refresh", function (event, frm) {
 						override_document_status(
 							frm,
 							current_state,
-							workflow.workflow_state_field
+							workflow.workflow_state_field,
 						);
 				}
 
@@ -54,33 +54,14 @@ function load_allowed_transitions(frm, workflow, current_state) {
 
 			transitions.forEach((t) => {
 				frm.page.add_action_item(__(t.action), function () {
-					frappe.dom.freeze();
 					frm.selected_workflow_action = t.action;
 
 					if (!frappe.ui.form.check_mandatory(frm)) {
-						return frappe.dom.unfreeze();
+						return;
 					}
 
-					frappe
-						.xcall(
-							"frappe_workflow_extension.frappe_workflow_extension.workflow.apply_workflow",
-							{
-								doc: frm.doc,
-								action: t.action,
-							}
-						)
-						.then((doc) => {
-							frappe.model.sync(doc);
-							frm.refresh();
-							frm.selected_workflow_action = null;
-							frappe.show_alert({
-								message: __("Workflow action applied: {0}", [t.action]),
-								indicator: "green",
-							});
-						})
-						.finally(() => frappe.dom.unfreeze());
+					open_workflow_comment_dialog(frm, t);
 				});
-
 				added = true;
 			});
 
@@ -226,4 +207,55 @@ function override_document_status(frm, current_state, workflow_state_field) {
 	} catch (error) {
 		console.warn("Failed to override document status:", error);
 	}
+}
+
+function open_workflow_comment_dialog(frm, transition) {
+	const require_comment = !!transition.require_comment;
+
+	const d = new frappe.ui.Dialog({
+		title: __("Workflow Action: {0}", [transition.action]),
+		fields: [
+			{
+				fieldtype: "Small Text",
+				fieldname: "comment",
+				label: __("Comment"),
+				reqd: require_comment,
+				description: require_comment
+					? __("A comment is required for this transition.")
+					: __("Optional"),
+			},
+		],
+		primary_action_label: __("Apply"),
+		primary_action(values) {
+			if (require_comment && !values.comment) {
+				frappe.msgprint(__("Comment is required."));
+				return;
+			}
+
+			d.hide();
+			apply_workflow_with_comment(frm, transition.action, values.comment);
+		},
+	});
+
+	d.show();
+}
+
+function apply_workflow_with_comment(frm, action, comment) {
+	frappe.dom.freeze();
+
+	frappe
+		.xcall("frappe_workflow_extension.frappe_workflow_extension.workflow.apply_workflow", {
+			doc: frm.doc,
+			action: action,
+			comment: comment,
+		})
+		.then((doc) => {
+			frappe.model.sync(doc);
+			frm.refresh();
+			frappe.show_alert({
+				message: __("Workflow action applied: {0}", [action]),
+				indicator: "green",
+			});
+		})
+		.finally(() => frappe.dom.unfreeze());
 }

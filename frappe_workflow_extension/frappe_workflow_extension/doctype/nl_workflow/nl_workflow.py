@@ -138,6 +138,23 @@ class NLWorkflow(Document):
         if not self.is_active:
             return
 
+        existing_workflow = frappe.db.exists(
+            "Workflow",
+            {
+                "document_type": self.document_type,
+                "is_active": 1,
+            },
+        )
+
+        if existing_workflow:
+            frappe.throw(
+                _(
+                    f"An active standard workflow already exists for Document Type: {self.document_type}. "
+                    f"Please deactivate the standard workflow before activating this one.<br><br>"
+                    f"<a href='/app/workflow/{existing_workflow}' target='_blank' style='text-decoration: underline;'><strong>View Existing Workflow</strong></a>"
+                )
+            )
+
         accounting_dimensions = (
             frappe.get_all(
                 "Accounting Dimension", filters={"disabled": 0}, pluck="fieldname"
@@ -166,8 +183,6 @@ class NLWorkflow(Document):
             filters=filters,
             fields=["name", "document_type"] + accounting_dimensions,
         )
-
-        print(existing_workflows, "<<< existing_workflows\n\n\n\n", filters)
 
         if existing_workflows:
             existing_doc = existing_workflows[0]
@@ -238,19 +253,18 @@ def get_workflow_state_count(doctype, workflow_state_field, states):
     frappe.has_permission(doctype=doctype, ptype="read", throw=True)
     states = frappe.parse_json(states)
 
-    if workflow_state_field in frappe.get_meta(doctype).get_valid_columns():
-        result = frappe.get_all(
-            doctype,
-            fields=[
-                workflow_state_field, 
-                {"count": "*", "as": "count"} 
-            ],
-            filters={
-                workflow_state_field: ["not in", states],
-                f"{workflow_state_field}": ["is", "set"]
-            },
-            group_by=workflow_state_field,
-        )
-        return result
-    
-    return []
+    meta = frappe.get_meta(doctype)
+    if workflow_state_field not in meta.get_valid_columns():
+        return []
+
+    return frappe.get_all(
+        doctype,
+        fields=[
+            workflow_state_field,
+            {"COUNT": "*", "as": "count"},
+        ],
+        filters={
+            workflow_state_field: ["not in", states],
+        },
+        group_by=workflow_state_field,
+    )

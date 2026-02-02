@@ -4,12 +4,14 @@
  "default_view": "List",
  "description": "Defines actions on states and the next step and allowed roles.",
  "doctype": "DocType",
+ "editable_grid": 1,
  "engine": "InnoDB",
  "field_order": [
   "state",
   "action",
   "next_state",
   "send_email_to_creator",
+  "require_comment",
   "column_break_eyal",
   "approver_type",
   "allowed",
@@ -125,11 +127,19 @@
    "fieldtype": "Data",
    "hidden": 1,
    "label": "Workflow Builder ID"
+  },
+  {
+   "default": "0",
+   "depends_on": "eval: doc.allow_self_approval == 1",
+   "description": "If enabled, the user will be blocked from completing this transition until they provide a comment in the action dialog.",
+   "fieldname": "require_comment",
+   "fieldtype": "Check",
+   "label": "Require Comment"
   }
  ],
  "istable": 1,
  "links": [],
- "modified": "2025-10-31 10:51:12.436579",
+ "modified": "2026-02-03 01:24:13.873497",
  "modified_by": "Administrator",
  "module": "Frappe Workflow Extension",
  "name": "NL Workflow Transition",

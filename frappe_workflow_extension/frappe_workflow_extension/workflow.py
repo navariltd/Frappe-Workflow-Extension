@@ -245,7 +245,7 @@ def has_approval_access(user, doc, transition):
 
 
 @frappe.whitelist()
-def apply_workflow(doc, action):
+def apply_workflow(doc, action, comment=None):
     """Execute a workflow transition action for NL Workflow."""
     doc = frappe.get_doc(frappe.parse_json(doc))
     doc.load_from_db()
@@ -278,7 +278,21 @@ def apply_workflow(doc, action):
     new_docstatus = DocStatus(next_state.doc_status or 0)
     _update_docstatus(doc, new_docstatus)
 
-    doc.add_comment("Workflow", _(f"Moved to {next_state.state}"))
+    docstatus_color_map = {
+        0: {"bg": "#fff3cd", "border": "#ffc107", "text": "#856404", "icon": "⊙"},
+        1: {"bg": "#e8f5e9", "border": "#4caf50", "text": "#2e7d32", "icon": "✓"},
+        2: {"bg": "#ffebee", "border": "#f44336", "text": "#c62828", "icon": "✕"},
+    }
+    status_style = docstatus_color_map.get(
+        int(next_state.doc_status or 0), docstatus_color_map[0]
+    )
+
+    comment_text = _(
+        f"<div style='padding: 8px; background-color: {status_style['bg']}; border-left: 4px solid {status_style['border']}; border-radius: 4px;'><strong style='color: {status_style['text']}'>{status_style['icon']} Moved to</strong> <span style='color: #1565c0; font-weight: bold;'>{next_state.state}</span></div>"
+    )
+    if comment:
+        comment_text += f"<div style='margin-top: 8px; padding: 8px; background-color: #e3f2fd; border-left: 4px solid #2196f3; border-radius: 4px;'><strong style='color: #1565c0;'>💬 Note:</strong> <em style='color: #666;'>{comment}</em></div>"
+    doc.add_comment("Workflow", comment_text)
     return doc
 
 
