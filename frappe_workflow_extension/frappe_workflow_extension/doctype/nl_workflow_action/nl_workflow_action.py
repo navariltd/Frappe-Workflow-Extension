@@ -348,7 +348,11 @@ def get_users_next_action_data(transitions, doc):
         return has_permission(doctype=doc, user=user)
 
     for transition in transitions:
-        users = get_users_with_role(transition.allowed)
+        users = (
+            get_users_with_role(transition.allowed)
+            if transition.approver_type == "Role"
+            else [transition.allowed]
+        )
         filtered_users = [
             user
             for user in users
