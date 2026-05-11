@@ -155,16 +155,18 @@ class NLWorkflow(Document):
             "cost_center": self.cost_center or ["in", [None, ""]],
         }
 
+        new_accounting_dimensions = []
         for dimension in accounting_dimensions:
-            if hasattr(self, dimension) and getattr(self, dimension):
-                filters[dimension] = getattr(self, dimension)
-            else:
-                filters[dimension] = ["in", [None, ""]]
+            if hasattr(self, dimension):
+                new_accounting_dimensions.append(dimension)
+
+                if getattr(self, dimension):
+                    filters[dimension] = getattr(self, dimension)
 
         existing_workflows = frappe.get_all(
             "NL Workflow",
             filters=filters,
-            fields=["name", "document_type"] + accounting_dimensions,
+            fields=["name", "document_type", *new_accounting_dimensions],
         )
 
         print(existing_workflows, "<<< existing_workflows\n\n\n\n", filters)
