@@ -263,10 +263,11 @@ def get_workflow_state_count(doctype, workflow_state_field, states):
         doctype,
         fields=[
             workflow_state_field,
-            {"COUNT": "*", "as": "count"},
+            "count(*) as count",
         ],
-        filters={
-            workflow_state_field: ["not in", states],
-        },
+        filters=[
+            [workflow_state_field, "not in", states],
+            [workflow_state_field, "is", "set"],
+        ],
         group_by=workflow_state_field,
     )
