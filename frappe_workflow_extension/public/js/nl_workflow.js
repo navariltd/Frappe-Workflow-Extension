@@ -1,261 +1,144 @@
-$(document).on("form-refresh", function (event, frm) {
-	if (!frm || !frm.doctype) return;
-	if (frm.doc.__islocal) return;
+/**
+ * Workflow actions on forms of DocTypes governed by an `NL Workflow`.
+ *
+ * `nl_workflow_registry.js` registers NL Workflows in the native client
+ * registries, so the Desk renders workflow indicators, workflow state columns,
+ * form read only handling, transition buttons and the workflow help action for
+ * those DocTypes from the standard `frappe.ui.form.States` controller. Two
+ * engine specific rules still need a client side counterpart:
+ *
+ * 1. A transition may be assigned to a single user (`approver_type`), which the
+ *    native action menu filters out because it compares `allowed` with the roles
+ *    of the user. The transitions returned by `get_transitions` are already
+ *    resolved for the current user, so only the self approval rule has to be
+ *    re-applied here.
+ * 2. A transition may require a comment, which the native action menu does not
+ *    collect.
+ */
 
-	try {
-		frappe.call({
-			method: "frappe_workflow_extension.frappe_workflow_extension.workflow.get_workflow_info",
-			args: { doc: frm.doc },
-			callback: function (res) {
-				if (!res?.message?.workflow && !res?.message?.current_state) return;
-				const workflow = res.message.workflow;
-				const workflow_name = res.message.workflow.name;
-				const current_state = res.message.current_state;
+const native_show_actions = frappe.ui.form.States.prototype.show_actions;
 
-				if (!res.message.allow_edit) {
-					frm.set_read_only(true);
-				}
-
-				const has_workflow = !!workflow_name;
-
-				if (has_workflow) {
-					frm.page.clear_primary_action();
-
-					if (!workflow.override_status)
-						override_document_status(
-							frm,
-							current_state,
-							workflow.workflow_state_field,
-						);
-				}
-
-				if (workflow.name) {
-					load_allowed_transitions(frm, workflow, current_state);
-				}
-			},
-		});
-	} catch (error) {
-		console.error(" Error initializing workflow:", error);
+frappe.ui.form.States.prototype.show_actions = function () {
+	if (!frappe.nl_workflow.is_enabled(this.frm.doctype)) {
+		return native_show_actions.call(this);
 	}
-});
 
-function load_allowed_transitions(frm, workflow, current_state) {
-	frappe.call({
-		method: "frappe_workflow_extension.frappe_workflow_extension.workflow.get_transitions",
-		args: { doc: frm.doc, workflow: workflow.name, current_state: current_state },
-		callback: function (r) {
-			const transitions = r.message || [];
+	show_nl_workflow_actions(this);
+};
 
+/**
+ * Show the transitions available for the current user as form actions.
+ *
+ * Mirrors `frappe.ui.form.States.show_actions` without its role check, see the
+ * module docstring.
+ *
+ * @param {frappe.ui.form.States} states - States controller of the form.
+ */
+function show_nl_workflow_actions(states) {
+	const frm = states.frm;
+
+	if (frm.doc.__unsaved === 1) return;
+
+	frappe.workflow
+		.get_transitions(frm.doc)
+		.then((transitions) => {
 			frm.page.clear_actions_menu();
-
-			if (!transitions.length) return;
-
 			let added = false;
 
-			transitions.forEach((t) => {
-				frm.page.add_action_item(__(t.action), function () {
-					frm.selected_workflow_action = t.action;
+			transitions
+				.filter((transition) => nl_has_approval_access(frm, transition))
+				.forEach((transition) => {
+					added = true;
+					frm.page.add_action_item(__(transition.action), function () {
+						const workflow = frappe.workflow.workflows[frm.doctype] || {};
 
-					if (!frappe.ui.form.check_mandatory(frm)) {
-						return;
-					}
-
-					open_workflow_comment_dialog(frm, t);
+						if (workflow.enable_action_confirmation) {
+							frappe.confirm(
+								__("Are you sure you want to {0}?", [transition.action]),
+								() => states.handle_workflow_action(transition)
+							);
+						} else {
+							states.handle_workflow_action(transition);
+						}
+					});
 				});
-				added = true;
-			});
 
-			if (added) add_workflow_help_action(frm, transitions);
-		},
-	});
-}
-
-function add_workflow_help_action(frm, transitions) {
-	try {
-		frm.page.add_action_item(__("Workflow Help"), function () {
-			const state_field = frappe.workflow.get_state_fieldname(frm.doctype);
-			const current_state = frm.doc[state_field] || __("Unknown");
-
-			let next_actions = transitions
-				.map((d) => `${d.action.bold()} (${d.allowed})`)
-				.join(", ");
-
-			if (!next_actions) next_actions = __("None: End of Workflow").bold();
-
-			const dialog = new frappe.ui.Dialog({
-				title: __("Workflow: {0}", [frm.doctype]),
-				fields: [
-					{
-						fieldtype: "HTML",
-						fieldname: "info",
-						options: `
-							<p>${__("Current status")}: ${current_state.bold()}</p>
-							<p>${__("Next actions")}: ${next_actions}</p>
-							<p>${__("Only users with permission can perform these transitions.")}</p>
-						`,
-					},
-				],
-			});
-			dialog.show();
+			states.setup_btn(added);
+		})
+		.catch(() => {
+			// A failed transition lookup must not leave the form without its
+			// regular actions, so fall back to showing no workflow action.
+			states.setup_btn(false);
 		});
-	} catch (error) {
-		console.warn(" Failed to add help action:", error);
-	}
 }
 
-function override_document_status(frm, current_state, workflow_state_field) {
-	try {
-		const doc = frm.doc;
-		const doctype = frm.doctype;
-		if (!doc || !doctype) return;
-
-		let label = __("Unknown");
-		let filter = null;
-
-		const meta = frappe.get_meta(doctype);
-		const is_submittable = meta?.is_submittable;
-
-		if (doc.__unsaved) {
-			label = __("Not Saved");
-			const color = "orange";
-			if (frm.page && typeof frm.page.set_indicator === "function") {
-				frm.page.set_indicator(label, color);
-			}
-		} else if (current_state) {
-			const value = current_state;
-			label = __(value);
-			filter = `${workflow_state_field},=,${value}`;
-
-			frappe.call({
-				method: "frappe.client.get_value",
-				args: {
-					doctype: "Workflow State",
-					fieldname: "style",
-					filters: { name: value },
-				},
-				callback: function (r) {
-					let color = "gray";
-					if (r.message && r.message.style) {
-						const style = r.message.style;
-						color =
-							{
-								Success: "green",
-								Warning: "orange",
-								Danger: "red",
-								Primary: "blue",
-								Inverse: "black",
-								Info: "light-blue",
-							}[style] || "gray";
-					}
-
-					if (frm.page && typeof frm.page.set_indicator === "function") {
-						frm.page.set_indicator(label, color, filter);
-					}
-				},
-			});
-		} else if (is_submittable && doc.docstatus === 0) {
-			label = __("Draft");
-			const color = "red";
-			filter = "docstatus,=,0";
-			if (frm.page && typeof frm.page.set_indicator === "function") {
-				frm.page.set_indicator(label, color, filter);
-			}
-		} else if (is_submittable && doc.docstatus === 1) {
-			label = __("Submitted");
-			const color = "blue";
-			filter = "docstatus,=,1";
-			if (frm.page && typeof frm.page.set_indicator === "function") {
-				frm.page.set_indicator(label, color, filter);
-			}
-		} else if (is_submittable && doc.docstatus === 2) {
-			label = __("Cancelled");
-			const color = "red";
-			filter = "docstatus,=,2";
-			if (frm.page && typeof frm.page.set_indicator === "function") {
-				frm.page.set_indicator(label, color, filter);
-			}
-		} else if (doc.status && meta?.states?.find((d) => d.title === doc.status)) {
-			const state = meta.states.find((d) => d.title === doc.status);
-			label = __(doc.status);
-			const color = frappe.scrub(state.color, "-");
-			filter = `status,=,${doc.status}`;
-			if (frm.page && typeof frm.page.set_indicator === "function") {
-				frm.page.set_indicator(label, color, filter);
-			}
-		} else if (doc.status) {
-			label = __(doc.status);
-			const color = frappe.utils.guess_colour(doc.status);
-			filter = `status,=,${doc.status}`;
-			if (frm.page && typeof frm.page.set_indicator === "function") {
-				frm.page.set_indicator(label, color, filter);
-			}
-		} else if (frappe.meta.has_field(doctype, "enabled")) {
-			label = doc.enabled ? __("Enabled") : __("Disabled");
-			const color = doc.enabled ? "blue" : "gray";
-			filter = `enabled,=,${doc.enabled ? 1 : 0}`;
-			if (frm.page && typeof frm.page.set_indicator === "function") {
-				frm.page.set_indicator(label, color, filter);
-			}
-		} else if (frappe.meta.has_field(doctype, "disabled")) {
-			label = doc.disabled ? __("Disabled") : __("Enabled");
-			const color = doc.disabled ? "gray" : "blue";
-			filter = `disabled,=,${doc.disabled ? 1 : 0}`;
-			if (frm.page && typeof frm.page.set_indicator === "function") {
-				frm.page.set_indicator(label, color, filter);
-			}
-		}
-	} catch (error) {
-		console.warn("Failed to override document status:", error);
-	}
+/**
+ * Apply the self approval rule of the engine.
+ *
+ * @param {frappe.ui.form.Form} frm - Form holding the document.
+ * @param {Object} transition - Transition offered for the current state.
+ * @returns {boolean} True when the current user may apply the transition.
+ */
+function nl_has_approval_access(frm, transition) {
+	return (
+		frappe.session.user === "Administrator" ||
+		Boolean(transition.allow_self_approval) ||
+		frappe.session.user !== frm.doc.owner
+	);
 }
 
-function open_workflow_comment_dialog(frm, transition) {
-	const require_comment = !!transition.require_comment;
+const native_handle_workflow_action = frappe.ui.form.States.prototype.handle_workflow_action;
 
-	const d = new frappe.ui.Dialog({
-		title: __("Workflow Action: {0}", [transition.action]),
-		fields: [
+frappe.ui.form.States.prototype.handle_workflow_action = function (transition) {
+	const frm = this.frm;
+
+	if (!frappe.nl_workflow.requires_comment(frm.doctype, transition.action)) {
+		return native_handle_workflow_action.call(this, transition);
+	}
+
+	frappe.prompt(
+		[
 			{
 				fieldtype: "Small Text",
 				fieldname: "comment",
 				label: __("Comment"),
-				reqd: require_comment,
-				description: require_comment
-					? __("A comment is required for this transition.")
-					: __("Optional"),
+				description: __("This transition requires a comment."),
+				reqd: 1,
 			},
 		],
-		primary_action_label: __("Apply"),
-		primary_action(values) {
-			if (require_comment && !values.comment) {
-				frappe.msgprint(__("Comment is required."));
-				return;
-			}
+		(values) => apply_nl_workflow_action(frm, transition.action, values.comment),
+		__("Workflow Action: {0}", [transition.action]),
+		__("Apply")
+	);
+};
 
-			d.hide();
-			apply_workflow_with_comment(frm, transition.action, values.comment);
-		},
-	});
-
-	d.show();
-}
-
-function apply_workflow_with_comment(frm, action, comment) {
+/**
+ * Apply a workflow action together with a comment.
+ *
+ * Mirrors `frappe.ui.form.States.handle_workflow_action`, which does not send a
+ * comment.
+ *
+ * @param {frappe.ui.form.Form} frm - Form being transitioned.
+ * @param {string} action - Workflow action to apply.
+ * @param {string} comment - Comment stored with the transition.
+ */
+function apply_nl_workflow_action(frm, action, comment) {
 	frappe.dom.freeze();
+	frm.selected_workflow_action = action;
 
-	frappe
-		.xcall("frappe_workflow_extension.frappe_workflow_extension.workflow.apply_workflow", {
-			doc: frm.doc,
-			action: action,
-			comment: comment,
-		})
+	Promise.resolve(frm.script_manager.trigger("before_workflow_action"))
+		.then(() =>
+			frappe.xcall("frappe.model.workflow.apply_workflow", {
+				doc: frm.doc,
+				action: action,
+				comment: comment,
+			})
+		)
 		.then((doc) => {
 			frappe.model.sync(doc);
 			frm.refresh();
-			frappe.show_alert({
-				message: __("Workflow action applied: {0}", [action]),
-				indicator: "green",
-			});
+			frm.selected_workflow_action = null;
+			frm.script_manager.trigger("after_workflow_action");
 		})
 		.finally(() => frappe.dom.unfreeze());
 }

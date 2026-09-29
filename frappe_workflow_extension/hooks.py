@@ -1,7 +1,9 @@
 app_name = "frappe_workflow_extension"
 app_title = "Frappe Workflow Extension"
 app_publisher = "Navari Ltd"
-app_description = "Extend Frappe’s workflow system with enhanced permissions, user roles, and approval flexibility."
+app_description = (
+	"Extend Frappe's workflow system with enhanced permissions, user roles, and approval flexibility."
+)
 app_email = "support@navari.co.ke"
 app_license = "agpl-3.0"
 
@@ -26,7 +28,10 @@ app_license = "agpl-3.0"
 
 # include js, css files in header of desk.html
 # app_include_css = "/assets/frappe_workflow_extension/css/frappe_workflow_extension.css"
-app_include_js = ["/assets/frappe_workflow_extension/js/nl_workflow.js"]
+app_include_js = [
+	"/assets/frappe_workflow_extension/js/nl_workflow_registry.js",
+	"/assets/frappe_workflow_extension/js/nl_workflow.js",
+]
 
 # include js, css files in header of web template
 # web_include_css = "/assets/frappe_workflow_extension/css/frappe_workflow_extension.css"
@@ -138,20 +143,26 @@ app_include_js = ["/assets/frappe_workflow_extension/js/nl_workflow.js"]
 # Hook on document methods and events
 
 doc_events = {
-    "*": {
-        "on_update": [
-            "frappe_workflow_extension.frappe_workflow_extension.doctype.nl_workflow_action.nl_workflow_action.process_workflow_actions",
-        ],
-        "on_cancel": [
-            "frappe_workflow_extension.frappe_workflow_extension.doctype.nl_workflow_action.nl_workflow_action.process_workflow_actions",
-        ],
-        "on_trash": [
-            "frappe_workflow_extension.frappe_workflow_extension.doctype.nl_workflow_action.nl_workflow_action.process_workflow_actions",
-        ],
-        "on_update_after_submit": [
-            "frappe_workflow_extension.frappe_workflow_extension.doctype.nl_workflow_action.nl_workflow_action.process_workflow_actions",
-        ],
-    },
+	"*": {
+		"validate": [
+			"frappe_workflow_extension.frappe_workflow_extension.compat.validate_workflow_document",
+		],
+		"before_update_after_submit": [
+			"frappe_workflow_extension.frappe_workflow_extension.compat.set_workflow_state_on_update_after_submit",
+		],
+		"on_update": [
+			"frappe_workflow_extension.frappe_workflow_extension.doctype.nl_workflow_action.nl_workflow_action.process_workflow_actions",
+		],
+		"on_cancel": [
+			"frappe_workflow_extension.frappe_workflow_extension.doctype.nl_workflow_action.nl_workflow_action.process_workflow_actions",
+		],
+		"on_trash": [
+			"frappe_workflow_extension.frappe_workflow_extension.doctype.nl_workflow_action.nl_workflow_action.process_workflow_actions",
+		],
+		"on_update_after_submit": [
+			"frappe_workflow_extension.frappe_workflow_extension.doctype.nl_workflow_action.nl_workflow_action.process_workflow_actions",
+		],
+	},
 }
 
 # Scheduled Tasks
@@ -183,16 +194,29 @@ doc_events = {
 # Overriding Methods
 # ------------------------------
 #
-# override_whitelisted_methods = {
-# 	"frappe.desk.doctype.event.event.get_events": "frappe_workflow_extension.event.get_events"
-# }
-#
 # each overriding function accepts a `data` argument;
 # generated from the base implementation of the doctype dashboard,
 # along with any modifications made in other Frappe apps
 # override_doctype_dashboards = {
 # 	"Task": "frappe_workflow_extension.task.get_dashboard_data"
 # }
+
+# Bridge the Frappe core workflow endpoints to the NL Workflow engine so that the
+# Desk (toolbar, workflow filters, list bulk actions), `frappe.client` and third
+# party apps keep working for DocTypes governed by an `NL Workflow`.
+override_whitelisted_methods = {
+	"frappe.model.workflow.get_transitions": "frappe_workflow_extension.frappe_workflow_extension.compat.get_transitions",
+	"frappe.model.workflow.apply_workflow": "frappe_workflow_extension.frappe_workflow_extension.compat.apply_workflow",
+	"frappe.model.workflow.bulk_workflow_approval": "frappe_workflow_extension.frappe_workflow_extension.compat.bulk_workflow_approval",
+	"frappe.model.workflow.get_common_transition_actions": "frappe_workflow_extension.frappe_workflow_extension.compat.get_common_transition_actions",
+	"frappe.model.workflow.can_cancel_document": "frappe_workflow_extension.frappe_workflow_extension.compat.can_cancel_document",
+}
+
+# Sessions / Boot
+# ------------------
+# Publish active NL Workflows to the Desk so that the client side workflow
+# registries can be filled (see public/js/nl_workflow_registry.js).
+boot_session = "frappe_workflow_extension.frappe_workflow_extension.client_data.boot_session"
 
 # exempt linked doctypes from being automatically cancelled
 #
@@ -253,12 +277,12 @@ doc_events = {
 
 
 accounting_dimension_doctypes = [
-    "NL Workflow",
+	"NL Workflow",
 ]
 
 fixtures = [
-    {
-        "doctype": "Workspace",
-        "filters": [["name", "in", ["Settings"]]],
-    }
+	{
+		"doctype": "Workspace",
+		"filters": [["name", "in", ["Settings"]]],
+	}
 ]
